@@ -68,6 +68,30 @@ public struct Player
 
 
     // Level 2 Setup
+    public Player(short consID, string consName, Socket consSocket, IPEndPoint consEP, string consKartID, short consLvID, short consRoomID)
+    {
+        isPlayerConnecting = true;
+
+        playerID = consID;
+        playerName = consName;
+
+        playerTCPSocket = consSocket;
+        playerEndPoint = consEP;
+
+        kartID = consKartID;
+        levelID = consLvID;
+        roomID = consRoomID;
+
+        playerPosition = new float[3];
+        playerRotation = new float[3];
+        playerInput = new float[2];
+    }
+    public Player CreateGame(string kartid, short lvid, short genRoomID)
+    {
+        return new Player(playerID, playerName, playerTCPSocket, playerEndPoint, kartid, lvid, genRoomID);
+    }
+
+
 
     // Disconnect
     private Player(bool consFlag, short consID, string consName, Socket consSocket)
@@ -130,7 +154,8 @@ public class ServerConsole
                     {
                         Console.WriteLine("ID: {0}, Name: {1}, IsConnected: {2}", player.playerID, player.playerName, player.isPlayerConnecting);
                         Console.WriteLine("Level: {0}", player.levelID);
-                        if (player.playerEndPoint != null) Console.WriteLine("UDP: {0}", player.playerEndPoint.Port);
+                        if (player.kartID != null) Console.WriteLine("Kart ID: {0}, Room ID: {1}", player.kartID, player.roomID);
+                        //if (player.playerEndPoint != null) Console.WriteLine("UDP: {0}", player.playerEndPoint.Port);
                     }
                     Console.WriteLine("==========================================");
                 }
@@ -301,7 +326,7 @@ public class ServerConsole
                     Buffer.BlockCopy(recvBuffer, 0, headerBuffer, 0, 4);
 
 
-                    switch (headerBuffer[0])
+                    switch (GetHeader(recvBuffer, 0))
                     {
                         case -1:
                             SwitchOffPlayer(pID);
@@ -321,11 +346,48 @@ public class ServerConsole
                             {
                                 if(player.levelID == 0)
                                 {
-                                    player.playerTCPSocket.Send(pieceMsg);
+                                    player.playerTCPSocket.Send(pieceMsg); // 2: message to all clients
                                 }
                             }
 
                             break;
+
+                        case 3:
+                            if(GetHeader(recvBuffer, 2) == pID)
+                            {
+                                if(playerDList.ContainsKey(pID))
+                                {
+                                    foreach(Player player in playerDList.Values)
+                                    {
+                                        if(player.playerID != pID)
+                                        {
+                                            player.playerTCPSocket.Send(recvBuffer); // 3: status update to all clients
+                                        }
+                                    }
+                                }
+                            }
+                            break;
+
+                        case 4:
+                            if(GetHeader(recvBuffer, 2) == pID)
+                            {
+                                if(playerDList.ContainsKey(pID))
+                                {
+                                    short lvid = GetHeader(recvBuffer, 4);
+                                    string kartid = Encoding.ASCII.GetString(GetContent(recvBuffer, 6));
+                                    short[] rmid = {4, (short)random.Next(1000, 9999) };
+                                    playerDList[pID] = playerDList[pID].CreateGame(kartid, lvid, rmid[1]);
+
+                                    byte[] roomCreateMsg = new byte[4];
+                                    Buffer.BlockCopy(rmid, 0, roomCreateMsg, 0, 4);
+
+
+                                    playerDList[pID].playerTCPSocket.Send(roomCreateMsg);
+                                }
+
+                            }
+                            break;
+
 
 
                         default:
