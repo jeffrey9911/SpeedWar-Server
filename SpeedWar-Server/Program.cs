@@ -65,9 +65,26 @@ public struct Player
         return new Player(playerID, playerName, playerTCPSocket, consEP);
     }
 
+    // Update level
+    private Player(short consID, string consName, Socket consSocket, IPEndPoint consEP, short consLvID)
+    {
+        isPlayerConnecting = true;
+
+        playerID = consID;
+        playerName = consName;
+
+        playerTCPSocket = consSocket;
+        playerEndPoint = consEP;
+
+        levelID = consLvID;
+    }
+    public Player SetLevelID(short lvid)
+    {
+        return new Player(playerID, playerName, playerTCPSocket, playerEndPoint, lvid);
+    }
 
 
-    // Level 2 Setup
+    // Create room
     public Player(short consID, string consName, Socket consSocket, IPEndPoint consEP, string consKartID, short consLvID, short consRoomID)
     {
         isPlayerConnecting = true;
@@ -155,6 +172,9 @@ public class ServerConsole
                         Console.WriteLine("ID: {0}, Name: {1}, IsConnected: {2}", player.playerID, player.playerName, player.isPlayerConnecting);
                         Console.WriteLine("Level: {0}", player.levelID);
                         if (player.kartID != null) Console.WriteLine("Kart ID: {0}, Room ID: {1}", player.kartID, player.roomID);
+                        if (player.playerPosition != null) Console.WriteLine("Position: [{0}, {1}, {2}]", player.playerPosition[0], player.playerPosition[1], player.playerPosition[2]);
+                        if (player.playerRotation != null) Console.WriteLine("Rotation: [{0}, {1}, {2}]", player.playerRotation[0], player.playerRotation[1], player.playerRotation[2]);
+                        if (player.playerInput != null) Console.WriteLine("Input: [{0}, {1}]", player.playerInput[0], player.playerInput[1]);
                         //if (player.playerEndPoint != null) Console.WriteLine("UDP: {0}", player.playerEndPoint.Port);
                     }
                     Console.WriteLine("==========================================");
@@ -357,9 +377,10 @@ public class ServerConsole
                             {
                                 if(playerDList.ContainsKey(pID))
                                 {
+                                    playerDList[pID] = playerDList[pID].SetLevelID(GetHeader(recvBuffer, 4));
                                     foreach(Player player in playerDList.Values)
                                     {
-                                        if(player.playerID != pID)
+                                        if(player.playerID != pID && player.levelID == 0)
                                         {
                                             player.playerTCPSocket.Send(recvBuffer); // 3: status update to all clients
                                         }
@@ -375,6 +396,7 @@ public class ServerConsole
                                 {
                                     short lvid = GetHeader(recvBuffer, 4);
                                     string kartid = Encoding.ASCII.GetString(GetContent(recvBuffer, 6));
+
                                     short[] rmid = {4, (short)random.Next(1000, 9999) };
                                     playerDList[pID] = playerDList[pID].CreateGame(kartid, lvid, rmid[1]);
 
@@ -382,9 +404,64 @@ public class ServerConsole
                                     Buffer.BlockCopy(rmid, 0, roomCreateMsg, 0, 4);
 
 
-                                    playerDList[pID].playerTCPSocket.Send(roomCreateMsg);
+                                    playerDList[pID].playerTCPSocket.Send(roomCreateMsg); // 4: to client creating room length 4
+
+                                    byte[] newRoomMsg = AddHeader(AddHeader(AddHeader(GetContent(recvBuffer, 6, recv - 6), playerDList[pID].levelID), pID), 4);
+
+                                    foreach(Player player in playerDList.Values)
+                                    {
+                                        if(player.playerID != pID)
+                                        {
+                                            player.playerTCPSocket.Send(newRoomMsg); // 4: to client new room created length > 4
+                                        }
+
+                                    }
                                 }
 
+                            }
+                            break;
+
+                        case 5:
+                            if(GetHeader(recvBuffer, 2) == pID)
+                            {
+                                short requestedID = GetHeader(recvBuffer, 4);
+                                string kID = Encoding.ASCII.GetString(GetContent(recvBuffer, 6));
+
+                                playerDList[pID] = playerDList[pID].CreateGame(kID, playerDList[requestedID].levelID, playerDList[requestedID].roomID);
+
+                                short[] rmid = { 4, playerDList[pID].roomID };
+                                byte[] roomCreateMsg = new byte[4];
+                                Buffer.BlockCopy(rmid, 0, roomCreateMsg, 0, 4);
+
+                                playerDList[pID].playerTCPSocket.Send(roomCreateMsg); // 4: to client creating room length 4
+
+                                byte[] newRoomMsg = AddHeader(AddHeader(AddHeader(GetContent(recvBuffer, 6, recv - 6), playerDList[pID].levelID), pID), 4);
+
+                                foreach (Player player in playerDList.Values)
+                                {
+                                    if (player.playerID != pID)
+                                    {
+                                        player.playerTCPSocket.Send(newRoomMsg); // 4: to client new room created length > 4
+                                    }
+
+                                }
+                            }
+                            break;
+
+                        case 6:
+                            if(GetHeader(recvBuffer, 2) == pID)
+                            {
+                                playerDList[pID].playerTCPSocket.Send(GetContent(recvBuffer, 0, recv));
+                            }
+                            break;
+
+                        case 9:
+                            foreach (Player player in playerDList.Values)
+                            {
+                                if(player.playerID != pID && player.roomID == playerDList[pID].roomID)
+                                {
+                                    player.playerTCPSocket.Send(GetContent(recvBuffer, 0, 6));
+                                }
                             }
                             break;
 
@@ -495,32 +572,50 @@ public class ServerConsole
                 break;
 
             case 1:
-                short playerid = GetHeader(recvBuffer, 2);
-                if (playerDList.ContainsKey(playerid))
+                short posPid = GetHeader(recvBuffer, 2);
+                if(playerDList.ContainsKey(posPid))
                 {
-                    Buffer.BlockCopy(GetContent(recvBuffer, 4), 0, playerDList[playerid].playerPosition, 0, 12);
+                    Buffer.BlockCopy(GetContent(recvBuffer, 6), 0, playerDList[posPid].playerPosition, 0, 12);
 
-                    //Console.WriteLine("GET Position: {0}: {1}, {2}, {3}", playerid,
-                    //    playerDList[playerid].playerPosition[0],
-                    //   playerDList[playerid].playerPosition[1],
-                    // playerDList[playerid].playerPosition[2]);
+                    foreach(Player player in playerDList.Values)
+                    {
+                        if(player.playerID != posPid && player.roomID == playerDList[posPid].roomID)
+                        {
+                            serverUDP.Send(recvBuffer, recvBuffer.Length, player.playerEndPoint);
+                        }
+                    }
+                }
+                break;
+
+            case 2:
+                short rotPid = GetHeader(recvBuffer, 2);
+                if (playerDList.ContainsKey(rotPid))
+                {
+                    Buffer.BlockCopy(GetContent(recvBuffer, 6), 0, playerDList[rotPid].playerRotation, 0, 12);
 
                     foreach (Player player in playerDList.Values)
                     {
-                        if (player.playerID != playerid)
+                        if (player.playerID != rotPid && player.roomID == playerDList[rotPid].roomID)
                         {
-                            if (player.playerEndPoint != null)
-                            {
-                                serverUDP.Send(recvBuffer, recvBuffer.Length, player.playerEndPoint);
-                            }
-                            else
-                            {
-                                Console.WriteLine("[System UDP]: " + player.playerName + "'s endpoint is null");
-                            }
-
+                            serverUDP.Send(recvBuffer, recvBuffer.Length, player.playerEndPoint);
                         }
                     }
+                }
+                break;
 
+            case 3:
+                short inpPid = GetHeader(recvBuffer, 2);
+                if (playerDList.ContainsKey(inpPid))
+                {
+                    Buffer.BlockCopy(GetContent(recvBuffer, 6), 0, playerDList[inpPid].playerInput, 0, 8);
+
+                    foreach (Player player in playerDList.Values)
+                    {
+                        if (player.playerID != inpPid && player.roomID == playerDList[inpPid].roomID)
+                        {
+                            serverUDP.Send(recvBuffer, recvBuffer.Length, player.playerEndPoint);
+                        }
+                    }
                 }
                 break;
 
@@ -551,6 +646,13 @@ public class ServerConsole
     static byte[] GetContent(byte[] buffer, int offset)
     {
         byte[] returnBy = new byte[buffer.Length - offset];
+        Buffer.BlockCopy(buffer, offset, returnBy, 0, returnBy.Length);
+        return returnBy;
+    }
+
+    static byte[] GetContent(byte[] buffer, int offset, int count)
+    {
+        byte[] returnBy = new byte[count];
         Buffer.BlockCopy(buffer, offset, returnBy, 0, returnBy.Length);
         return returnBy;
     }
